@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 📊 Prompt Insights AI - MVP
 
 Prompt-based Business Intelligence App built with Streamlit, Plotly, OpenAI, and Database connectors.
@@ -25,3 +26,7 @@ Prompt-based Business Intelligence App built with Streamlit, Plotly, OpenAI, and
 
 ```bash
 pip install -r requirements.txt
+=======
+# ChartAI
+BI with AI
+>>>>>>> 1644448c6910c68212656a80f2b50c5af4ecbfa8
