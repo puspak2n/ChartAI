@@ -1,0 +1,13 @@
+{
+    "charts": [
+        {
+            "prompt": "Sales vs Profit by Ship Mode"
+        },
+        {
+            "prompt": "sales vs profit by country"
+        },
+        {
+            "prompt": "sales by country"
+        }
+    ]
+}

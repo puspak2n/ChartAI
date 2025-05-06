@@ -1,0 +1,8 @@
+streamlit
+pandas
+plotly
+openai
+psycopg2
+pymysql
+snowflake-connector-python
+teradatasql
