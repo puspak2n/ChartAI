@@ -1,0 +1,2 @@
+# ChartAI
+BI with AI
