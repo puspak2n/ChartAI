@@ -1,5 +1,8 @@
+import random
 import pandas as pd
+import openai
 import logging
+import os
 
 # Set up logging
 logging.basicConfig(
@@ -9,98 +12,130 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def generate_sample_prompts(dimensions, measures, dates, df):
+# Load OpenAI API key for prompt generation
+openai.api_key = os.getenv("OPENAI_API_KEY")
+USE_OPENAI = bool(openai.api_key)
+if USE_OPENAI:
+    logger.info("OpenAI API key loaded for prompt generation.")
+else:
+    logger.warning("OpenAI API key not found for prompt generation. Using rule-based generation.")
+
+def prioritize_fields(dimensions, measures, dates, df):
     """
-    Generate sample prompts based on available dimensions, measures, and dates.
-    Filters out inappropriate measures like Postal Code and IDs.
+    Prioritize fields based on data quality and relevance.
+    Returns: (prioritized_dimensions, prioritized_measures, prioritized_dates)
     """
-    try:
-        prompts = []
-        
-        # Filter out inappropriate measures (e.g., Postal Code, IDs)
-        valid_measures = [m for m in measures if m.lower() != "postal code" and "id" not in m.lower()]
-        if not valid_measures or not dimensions:
-            logger.warning("No valid measures or dimensions for prompt generation: measures=%s, dimensions=%s", valid_measures, dimensions)
-            return []
-        
-        # Prioritize business-relevant measures (e.g., Sales, Profit)
-        priority_measures = ['Sales', 'Profit', 'Quantity', 'Discount', 'Shipping Cost', 'Calculate the profit margin as Profit divided by Sales']
-        prioritized_measures = []
-        for m in priority_measures:
-            for vm in valid_measures:
-                if vm.lower() == m.lower():
-                    prioritized_measures.append(vm)
-                    break
-        # Add remaining measures that weren't in the priority list
-        prioritized_measures.extend([m for m in valid_measures if m not in prioritized_measures])
-        valid_measures = prioritized_measures
-        
-        if not valid_measures:
-            logger.warning("No valid measures after prioritization")
-            return []
-        
-        # Basic aggregation: Measure by Dimension
-        prompts.append(f"{valid_measures[0]} by {dimensions[0]}")
-        
-        # Top N: Top 5 Dimension by Measure
-        prompts.append(f"Top 5 {dimensions[0]} by {valid_measures[0]}")
-        
-        # Trend over time: Measure over Date
-        if dates:
-            prompts.append(f"{valid_measures[0]} trend over {dates[0]}")
-        
-        # Filtered prompt: Measure by Dimension with filter
-        if len(dimensions) > 1:
-            unique_values = df[dimensions[1]].dropna().unique()
-            if len(unique_values) > 0:
-                prompts.append(f"{valid_measures[0]} by {dimensions[0]} with filter {dimensions[1]} = {unique_values[0]}")
-        
-        # Comparison: Measure vs Measure by Dimension
-        if len(valid_measures) > 1:
-            prompts.append(f"{valid_measures[0]} vs {valid_measures[1]} by {dimensions[0]}")
-        
-        logger.info("Generated rule-based sample prompts: %s", prompts)
-        return prompts
-    except Exception as e:
-        logger.error("Failed to generate rule-based sample prompts: %s", str(e))
-        return []
+    prioritized_dimensions = []
+    prioritized_measures = []
+    prioritized_dates = []
+
+    for dim in dimensions:
+        if dim in df.columns and df[dim].nunique() > 1 and df[dim].isna().mean() < 0.5:
+            prioritized_dimensions.append(dim)
+
+    for measure in measures:
+        if measure in df.columns and pd.api.types.is_numeric_dtype(df[measure]) and df[measure].isna().mean() < 0.5:
+            prioritized_measures.append(measure)
+
+    for date in dates:
+        if date in df.columns and df[date].notna().any():
+            prioritized_dates.append(date)
+
+    return prioritized_dimensions, prioritized_measures, prioritized_dates
 
 def generate_prompts_with_llm(dimensions, measures, dates, df):
     """
-    Use the rule-based method to generate sample prompts, as per user preference.
+    Generate sample prompts using OpenAI's GPT model.
     """
-    logger.info("Using rule-based prompt generation as per user preference.")
-    return generate_sample_prompts(dimensions, measures, dates, df)
+    if not USE_OPENAI:
+        logger.info("Using rule-based prompt generation as per user preference.")
+        return None
 
-def prioritize_fields(df):
-    """
-    Prioritize fields for prompt generation based on their importance or usage.
-    """
     try:
-        dimensions = [col for col in df.columns if not pd.api.types.is_numeric_dtype(df[col]) and not pd.api.types.is_datetime64_any_dtype(df[col])]
-        measures = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
-        dates = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])]
-        
-        # Prioritize measures based on variance
-        prioritized_measures = []
-        for measure in measures:
-            if measure.lower() == "postal code" or "id" in measure.lower():
-                continue
-            variance = df[measure].var() if pd.api.types.is_numeric_dtype(df[measure]) else 0
-            prioritized_measures.append((measure, variance))
-        prioritized_measures.sort(key=lambda x: x[1], reverse=True)
-        measures = [m[0] for m in prioritized_measures]
-        
-        # Prioritize dimensions based on cardinality
-        prioritized_dimensions = []
+        dimensions_str = ", ".join(dimensions)
+        measures_str = ", ".join(measures)
+        dates_str = ", ".join(dates)
+
+        unique_values = {}
         for dim in dimensions:
-            cardinality = df[dim].nunique()
-            prioritized_dimensions.append((dim, cardinality))
-        prioritized_dimensions.sort(key=lambda x: x[1], reverse=True)
-        dimensions = [d[0] for d in prioritized_dimensions]
-        
-        logger.info("Prioritized fields - Dimensions: %s, Measures: %s, Dates: %s", dimensions, measures, dates)
-        return dimensions, measures, dates
+            if dim in df.columns:
+                unique_vals = df[dim].dropna().unique()
+                if len(unique_vals) > 0:
+                    unique_values[dim] = unique_vals[0]
+        unique_values_str = ", ".join([f"{k}={v}" for k, v in unique_values.items()])
+
+        prompt = (
+            f"Generate 5 concise, insightful, and varied natural language prompts for data visualization. "
+            f"Available columns - Dimensions: {dimensions_str}. Measures: {measures_str}. Dates: {dates_str}. "
+            f"Unique values for filters: {unique_values_str}. "
+            f"Include a mix of: "
+            f"- Trend analysis (e.g., sales trends over time by a dimension), "
+            f"- Comparisons (e.g., comparing two metrics across a dimension), "
+            f"- Top N rankings (e.g., top 5 categories by profit), "
+            f"- Filtered views (e.g., sales by region for a specific customer), "
+            f"- Outlier detection or correlations (e.g., find outliers in profit by category). "
+            f"Ensure prompts are actionable and relevant for business insights."
+        )
+
+        client = openai.OpenAI(api_key=openai.api_key)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a data analyst creating insightful visualization prompts for business users."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.7
+        )
+        prompts = response.choices[0].message.content.strip().split('\n')
+        prompts = [p.strip('- ').strip() for p in prompts if p.strip()]
+        logger.info("Generated GPT-based sample prompts: %s", prompts)
+        return prompts[:5]
     except Exception as e:
-        logger.error("Failed to prioritize fields: %s", str(e))
-        return [], [], []
+        logger.error("Failed to generate LLM-based prompts: %s", str(e))
+        return None
+
+def generate_sample_prompts(dimensions, measures, dates, df):
+    """
+    Generate a list of sample prompts using rule-based logic for varied and insightful prompts.
+    """
+    prioritized_dimensions, prioritized_measures, prioritized_dates = prioritize_fields(dimensions, measures, dates, df)
+    
+    if not prioritized_dimensions or not prioritized_measures:
+        logger.warning("No prioritized dimensions or measures available for prompt generation.")
+        return []
+
+    prompts = []
+
+    # Prompt 1: Top N ranking with a different dimension and measure
+    if len(prioritized_dimensions) >= 2 and len(prioritized_measures) >= 1:
+        dim = prioritized_dimensions[1]  # Use the second dimension to vary from Ship Mode
+        measure = prioritized_measures[0]
+        prompts.append(f"Top 3 {dim} by {measure}")
+
+    # Prompt 2: Trend analysis with a different date and measure
+    if prioritized_dates and len(prioritized_measures) >= 2:
+        date = prioritized_dates[0]
+        measure = prioritized_measures[1]  # Use a different measure
+        prompts.append(f"{measure} trend over {date} by {prioritized_dimensions[0]}")
+
+    # Prompt 3: Correlation between two measures
+    if len(prioritized_measures) >= 2:
+        prompts.append(f"Correlation between {prioritized_measures[0]} and {prioritized_measures[1]}")
+
+    # Prompt 4: Filtered view with a different dimension and filter
+    if len(prioritized_dimensions) >= 3:
+        filter_dim = prioritized_dimensions[2]  # Use a different dimension for filtering
+        unique_values = df[filter_dim].dropna().unique()
+        if unique_values.size > 0:
+            filter_value = unique_values[0]
+            prompts.append(f"{prioritized_measures[0]} by {prioritized_dimensions[0]} with filter {filter_dim} = {filter_value}")
+
+    # Prompt 5: Outlier detection with a different measure and dimension
+    if len(prioritized_measures) >= 2 and len(prioritized_dimensions) >= 2:
+        prompts.append(f"Find outliers in {prioritized_measures[1]} by {prioritized_dimensions[1]}")
+
+    # Shuffle to ensure variety in display order
+    random.shuffle(prompts)
+    logger.info("Generated rule-based sample prompts: %s", prompts)
+    return prompts[:5]
