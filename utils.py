@@ -1,6 +1,7 @@
 import pandas as pd
 import logging
 import json
+import os
 
 # Set up logging
 logging.basicConfig(
@@ -10,146 +11,77 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def classify_columns(df, field_types=None):
+def classify_columns(df, existing_field_types=None):
     """
     Classify DataFrame columns into dimensions, measures, dates, and IDs.
-    Respects existing classifications in field_types if provided.
-    Ensures at least one measure and one dimension are identified for flexibility.
+    Returns a tuple of (dimensions, measures, dates, ids).
     """
-    try:
-        # Initialize categories
-        dimensions = []
-        measures = []
-        dates = []
-        ids = []
-        
-        # Use existing field_types if provided, otherwise initialize empty lists
-        if field_types:
-            dimensions = field_types.get("dimension", []).copy()
-            measures = field_types.get("measure", []).copy()
-            dates = field_types.get("date", []).copy()
-            ids = field_types.get("id", []).copy()
-        
-        # Log the initial DataFrame structure for debugging
-        logger.info("Dataset columns: %s", df.columns.tolist())
-        logger.info("Dataset dtypes: %s", df.dtypes.to_dict())
-        logger.info("Existing field_types: %s", field_types)
-        
-        # Columns that have already been classified
-        classified_columns = dimensions + measures + dates + ids
-        unclassified_columns = [col for col in df.columns if col not in classified_columns]
-        
-        for col in unclassified_columns:
-            # Step 1: Check for dates
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                dates.append(col)
-                logger.info("Classified %s as Date (datetime type)", col)
-                continue
-            
-            # Step 2: Check for IDs (columns containing "id" in the name)
-            if "id" in col.lower():
-                ids.append(col)
-                logger.info("Classified %s as ID (contains 'id' in name)", col)
-                continue
-            
-            # Step 3: Check for specific columns like Postal Code (treat as dimension)
-            if col.lower() == "postal code":
-                dimensions.append(col)
-                logger.info("Classified %s as Dimension (postal code)", col)
-                continue
-            
-            # Step 4: Check for numeric columns (measures)
-            # First, attempt to convert the column to numeric to catch string-based numbers
+    if existing_field_types is None:
+        existing_field_types = {}
+
+    dimensions = existing_field_types.get("dimension", [])
+    measures = existing_field_types.get("measure", [])
+    dates = existing_field_types.get("date", [])
+    ids = existing_field_types.get("id", [])
+
+    logger.info("Dataset columns: %s", list(df.columns))
+    logger.info("Dataset dtypes: %s", {col: df[col].dtype for col in df.columns})
+    logger.info("Existing field_types: %s", existing_field_types)
+
+    for col in df.columns:
+        if col in dimensions or col in measures or col in dates or col in ids:
+            continue
+
+        # Check for IDs (columns with "id" in name)
+        if "id" in col.lower():
+            ids.append(col)
+            logger.info("Classified %s as ID (contains 'id' in name)", col)
+            continue
+
+        # Check for dates (datetime type or name contains "date")
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            dates.append(col)
+            logger.info("Classified %s as Date (datetime type)", col)
+            continue
+        if "date" in col.lower():
             try:
-                numeric_series = pd.to_numeric(df[col], errors='coerce')
-                if numeric_series.notna().mean() > 0.5:  # At least 50% of values are numeric
-                    measures.append(col)
-                    logger.info("Classified %s as Measure (numeric after conversion)", col)
-                    continue
-            except Exception as e:
-                logger.debug("Could not convert %s to numeric: %s", col, str(e))
-            
-            # If pandas already identifies it as numeric
-            if pd.api.types.is_numeric_dtype(df[col]):
-                measures.append(col)
-                logger.info("Classified %s as Measure (numeric dtype)", col)
+                df[col] = pd.to_datetime(df[col])
+                dates.append(col)
+                logger.info("Explicitly converted %s to datetime due to 'date' in name", col)
                 continue
-            
-            # Step 5: Treat as dimension if non-numeric, non-date, non-ID
-            # Check if the column has a reasonable number of unique values to be a categorical dimension
-            unique_count = df[col].nunique()
-            total_count = len(df[col])
-            unique_ratio = unique_count / total_count if total_count > 0 else 0
-            # Relaxed heuristic: consider columns with unique ratio < 0.8 or unique count < 100 as dimensions
-            if unique_ratio < 0.8 or unique_count < 100:
+            except Exception as e:
+                logger.debug("Could not convert %s to datetime: %s", col, str(e))
+
+        # Check for numeric types
+        if pd.api.types.is_numeric_dtype(df[col]):
+            # Check if it could be a dimension (e.g., low unique value count)
+            unique_ratio = df[col].nunique() / len(df[col])
+            if unique_ratio < 0.05:  # Less than 5% unique values
+                dimensions.append(col)
+                logger.info("Classified %s as Dimension (numeric but low unique ratio=%.2f)", col, unique_ratio)
+            else:
+                measures.append(col)
+                logger.info("Classified %s as Measure (numeric after conversion)", col)
+            continue
+
+        # Check for postal codes (numeric but should be dimension)
+        if col.lower() in ["postal code", "zip code", "zip"]:
+            dimensions.append(col)
+            logger.info("Classified %s as Dimension (postal code)", col)
+            continue
+
+        # Check for categorical columns (object or string types)
+        if pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]):
+            unique_ratio = df[col].nunique() / len(df[col])
+            if unique_ratio < 0.05:  # Less than 5% unique values
                 dimensions.append(col)
                 logger.info("Classified %s as Dimension (categorical, unique ratio=%.2f)", col, unique_ratio)
             else:
-                logger.info("Column %s has too many unique values (ratio=%.2f), not classified as dimension", col, unique_ratio)
-        
-        # Remove any duplicates while preserving order
-        dimensions = list(dict.fromkeys(dimensions))
-        measures = list(dict.fromkeys(measures))
-        dates = list(dict.fromkeys(dates))
-        ids = list(dict.fromkeys(ids))
-        
-        # Ensure mutual exclusivity: remove IDs and dates from measures and dimensions
-        measures = [col for col in measures if col not in ids and col not in dates]
-        dimensions = [col for col in dimensions if col not in ids and col not in dates and col not in measures]
-        
-        # Fallback: If no measures or dimensions are found, force classify to ensure usability
-        unclassified = [col for col in df.columns if col not in measures and col not in dimensions and col not in dates and col not in ids]
-        
-        if not measures and unclassified:
-            # Prefer numeric columns for measures
-            for col in unclassified:
-                try:
-                    numeric_series = pd.to_numeric(df[col], errors='coerce')
-                    if numeric_series.notna().any():  # At least some values are numeric
-                        measures.append(col)
-                        logger.info("Fallback: Classified %s as Measure (forced numeric)", col)
-                        if col in dimensions:
-                            dimensions.remove(col)
-                        break
-                except:
-                    continue
-            
-            # If still no measures, take the first unclassified column
-            if not measures and unclassified:
-                col = unclassified[0]
-                measures.append(col)
-                logger.info("Fallback: Classified %s as Measure (forced, no numeric found)", col)
-                if col in dimensions:
-                    dimensions.remove(col)
-        
-        if not dimensions and unclassified:
-            # Prefer non-numeric columns for dimensions, or columns with low unique value counts
-            for col in unclassified:
-                if col not in measures:
-                    unique_count = df[col].nunique()
-                    total_count = len(df[col])
-                    unique_ratio = unique_count / total_count if total_count > 0 else 0
-                    dimensions.append(col)
-                    logger.info("Fallback: Classified %s as Dimension (forced, unique ratio=%.2f)", col, unique_ratio)
-                    break
-            
-            # If still no dimensions, take the first unclassified column not in measures
-            if not dimensions:
-                for col in unclassified:
-                    if col not in measures:
-                        dimensions.append(col)
-                        logger.info("Fallback: Classified %s as Dimension (forced, no categorical found)", col)
-                        break
-        
-        logger.info("Final Classified columns - Dimensions: %s, Measures: %s, Dates: %s, IDs: %s", dimensions, measures, dates, ids)
-        return dimensions, measures, dates, ids
-    except Exception as e:
-        logger.error("Failed to classify columns: %s", str(e))
-        # Fallback to a minimal classification
-        unclassified = df.columns.tolist()
-        if unclassified:
-            return [unclassified[0]], [unclassified[0]], [], []
-        return [], [], [], []
+                dimensions.append(col)
+                logger.info("Classified %s as Dimension (categorical, unique ratio=%.2f)", col, unique_ratio)
+
+    logger.info("Final Classified columns - Dimensions: %s, Measures: %s, Dates: %s, IDs: %s", dimensions, measures, dates, ids)
+    return dimensions, measures, dates, ids
 
 def load_data(uploaded_file):
     """
@@ -180,10 +112,14 @@ def save_dashboard(project_name, chart_history):
 
 def load_openai_key():
     """
-    Load OpenAI API key from environment (placeholder since OpenAI dependency is removed).
+    Load OpenAI API key from environment.
     """
-    logger.info("OpenAI key loading skipped as dependency is removed")
-    return None
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("OpenAI API key not found in environment.")
+        return None
+    logger.info("OpenAI API key loaded successfully.")
+    return api_key
 
 def generate_gpt_insight_with_fallback(chart_data, dimension, metric):
     """

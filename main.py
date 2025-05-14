@@ -130,7 +130,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Load OpenAI Key
-load_openai_key()
+openai.api_key = load_openai_key()
+USE_OPENAI = openai.api_key is not None
 
 # Session State Init
 if "chart_history" not in st.session_state:
@@ -250,6 +251,28 @@ def generate_sample_prompts(dimensions, measures, dates, df, max_prompts=10):
     logger.info("Generated rule-based sample prompts: %s", numbered_prompts)
     return numbered_prompts
 
+# Helper function to preprocess DataFrame for date columns
+def preprocess_dates(df):
+    """
+    Preprocess the DataFrame to convert potential date columns to datetime.
+    This ensures date columns are detected even if their names differ from 'Order Date' or 'Ship Date'.
+    """
+    for col in df.columns:
+        # Skip if already a datetime type
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        # Attempt to convert string/object columns to datetime
+        if pd.api.types.is_string_dtype(df[col]) or pd.api.types.is_object_dtype(df[col]):
+            try:
+                converted = pd.to_datetime(df[col], errors='coerce')
+                non_na_ratio = converted.notna().mean()
+                if non_na_ratio > 0.8:  # At least 80% of values are valid dates
+                    df[col] = converted
+                    logger.info("Preprocessed %s as potential date column (non-NaN ratio=%.2f)", col, non_na_ratio)
+            except Exception as e:
+                logger.debug("Could not preprocess %s as date column: %s", col, str(e))
+    return df
+
 # Sidebar
 with st.sidebar:
     st.title("ChartGPT AI")
@@ -271,7 +294,10 @@ with st.sidebar:
         if selected_project != "(None)" and st.session_state.current_project != selected_project:
             try:
                 if os.path.exists(f"projects/{selected_project}/dataset.csv"):
-                    st.session_state.dataset = pd.read_csv(f"projects/{selected_project}/dataset.csv")
+                    df = pd.read_csv(f"projects/{selected_project}/dataset.csv")
+                    # Preprocess the DataFrame for date columns
+                    df = preprocess_dates(df)
+                    st.session_state.dataset = df
                     st.session_state.current_project = selected_project
                     st.success(f"Opened: {selected_project}")
                     logger.info("Opened project: %s", selected_project)
@@ -316,9 +342,9 @@ with st.sidebar:
     # Sample Prompts Section (only if dataset is loaded)
     if st.session_state.dataset is not None:
         df = st.session_state.dataset.copy()
-        for col in ['Order Date', 'Ship Date']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+        # Preprocess dates before classification
+        df = preprocess_dates(df)
+        st.session_state.dataset = df
         
         if not st.session_state.classified:
             try:
@@ -447,15 +473,6 @@ def save_dataset_changes():
         except Exception as e:
             st.error(f"Failed to save dataset: {str(e)}")
             logger.error("Failed to save dataset for project %s: %s", st.session_state.current_project, str(e))
-
-# Load OpenAI API key from environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
-    logger.warning("OpenAI API key not found in environment. Falling back to hard-coded insights.")
-    USE_OPENAI = False
-else:
-    USE_OPENAI = True
-    logger.info("OpenAI API key loaded successfully.")
 
 def generate_gpt_insights(stats, metric, prompt, chart_data, dimension=None, second_metric=None):
     """
@@ -649,6 +666,7 @@ def generate_overall_data_analysis(df, dimensions, measures, dates):
             "Consider focusing on top performers to drive business growth."
         ]
 
+
 def display_chart(idx, prompt, dimensions, measures, dates, df):
     """
     Display a chart with title on the left, and chart type toggle, sort button, and remove button on the right in the same row.
@@ -728,21 +746,24 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
         
         # Check if the dimension has more than 25 unique values or fewer than 5 for Pie chart
         unique_values = len(chart_data[dimension].unique()) if dimension in chart_data.columns else 0
-        if chart_type == "Bar":
-            if unique_values > 25:
-                chart_type = "Table"
+        render_type = chart_type  # The type we'll actually render
+        if chart_type in ["Bar", "Line", "Scatter", "Pie"]:
+            if unique_values > 25 and selected_chart_type != "Table":
+                render_type = "Table"
+                st.warning(f"Switched to Table because the dimension '{dimension}' has {unique_values} unique values (> 25). Select 'Table' in the dropdown to avoid this warning.")
                 logger.info("Switched chart %d to Table due to %d unique values in dimension %s", idx, unique_values, dimension)
-            elif unique_values < 5:
-                chart_type = "Pie"
+            elif unique_values < 5 and chart_type != "Pie" and selected_chart_type != "Table":
+                render_type = "Pie"
+                st.info(f"Switched to Pie chart because the dimension '{dimension}' has {unique_values} unique values (< 5).")
                 logger.info("Switched chart %d to Pie due to %d unique values in dimension %s", idx, unique_values, dimension)
 
         # Handle Text-based Results (e.g., Correlation)
-        if chart_type == "Text":
+        if render_type == "Text":
             st.write(f"**Result:** {chart_data.iloc[0, 0]:.2f}")
             logger.info("Rendered chart %d as Text result", idx)
         
-        # Render the chart based on chart_type
-        elif chart_type == "Scatter":
+        # Render the chart based on render_type
+        elif render_type == "Scatter":
             if second_metric and dimension in chart_data.columns:
                 fig = px.scatter(
                     chart_data,
@@ -759,13 +780,15 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 if dimension in chart_data.columns:
                     # Check again for unique values after fallback
                     unique_values = len(chart_data[dimension].unique())
-                    if unique_values > 25:
-                        chart_type = "Table"
+                    if unique_values > 25 and selected_chart_type != "Table":
+                        render_type = "Table"
+                        st.warning(f"Switched to Table because the dimension '{dimension}' has {unique_values} unique values (> 25).")
                         logger.info("Switched chart %d to Table due to %d unique values in dimension %s (Scatter fallback)", idx, unique_values, dimension)
-                    elif unique_values < 5:
-                        chart_type = "Pie"
+                    elif unique_values < 5 and selected_chart_type != "Table":
+                        render_type = "Pie"
+                        st.info(f"Switched to Pie chart because the dimension '{dimension}' has {unique_values} unique values (< 5).")
                         logger.info("Switched chart %d to Pie due to %d unique values in dimension %s (Scatter fallback)", idx, unique_values, dimension)
-                    if chart_type == "Bar":
+                    if render_type == "Bar":
                         fig = px.bar(
                             chart_data,
                             x=dimension,
@@ -774,7 +797,7 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                         )
                         st.plotly_chart(fig, use_container_width=True, key=f"plotly_chart_{idx}_bar_fallback")
                         logger.info("Rendered chart %d as Bar chart (fallback from Scatter)", idx)
-                    elif chart_type == "Pie":
+                    elif render_type == "Pie":
                         fig = px.pie(
                             chart_data,
                             names=dimension,
@@ -788,7 +811,7 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                     logger.error("Dimension not found for fallback chart in chart %d", idx)
                     return
         
-        elif chart_type == "Line":
+        elif render_type == "Line":
             if secondary_dimension and secondary_dimension in chart_data.columns:
                 fig = px.line(
                     chart_data,
@@ -813,7 +836,7 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 logger.error("Dimension not found for line chart in chart %d", idx)
                 return
         
-        elif chart_type == "Bar":
+        elif render_type == "Bar":
             if secondary_dimension and secondary_dimension in chart_data.columns:
                 fig = px.bar(
                     chart_data,
@@ -838,7 +861,7 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 logger.error("Dimension not found for bar chart in chart %d", idx)
                 return
         
-        elif chart_type == "Pie":
+        elif render_type == "Pie":
             if dimension in chart_data.columns:
                 fig = px.pie(
                     chart_data,
@@ -853,7 +876,7 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 logger.error("Dimension not found for pie chart in chart %d", idx)
                 return
         
-        elif chart_type == "Map" and dimension in chart_data.columns:
+        elif render_type == "Map" and dimension in chart_data.columns:
             if "Outlier_Label" in chart_data.columns:
                 fig = px.choropleth(
                     chart_data,
@@ -876,8 +899,8 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
             st.plotly_chart(fig, use_container_width=True, key=f"plotly_chart_{idx}_map")
             logger.info("Rendered chart %d as Map chart", idx)
         
-        elif chart_type == "Table":
-            st.write("Displaying data as a table due to large number of unique values in dimension:")
+        elif render_type == "Table":
+            st.write("Displaying data as a table:")
             st.dataframe(chart_data)
             logger.info("Rendered chart %d as Table", idx)
         
@@ -907,6 +930,72 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
         st.error(f"Error rendering chart {idx}: {str(e)}")
         logger.error("Error rendering chart %d: %s", idx, str(e))
 
+# Convert IF-THEN-ELSE-END syntax to Python-compatible expression
+def parse_if_statement(formula_str):
+    """
+    Convert IF-THEN-ELSE-END syntax to a Python-compatible ternary expression.
+    Handles nested IF statements recursively.
+    """
+    # Replace keywords and operators
+    formula_str = formula_str.replace("IF ", "").replace(" THEN ", " ? ").replace(" ELSE ", " : ").replace(" END", "")
+    formula_str = formula_str.replace(" AND ", " and ").replace(" OR ", " or ")
+    
+    def convert_to_ternary(expr):
+        if " ? " not in expr or " : " not in expr:
+            return expr
+        
+        # Split on the first ' ? ' to separate condition
+        parts = expr.split(" ? ", 1)
+        if len(parts) < 2:
+            logger.error("Invalid IF statement syntax: %s", expr)
+            raise ValueError("Invalid IF statement syntax")
+        
+        condition = parts[0].strip()
+        rest = parts[1]
+        
+        # Find the corresponding ' : ' for this IF, accounting for nested IFs
+        depth = 0
+        then_end = -1
+        for i, char in enumerate(rest):
+            if char == "?":
+                depth += 1
+            elif char == ":" and depth == 0:
+                then_end = i
+                break
+            elif char == ":":
+                depth -= 1
+        
+        if then_end == -1:
+            logger.error("Missing ELSE in IF statement: %s", expr)
+            raise ValueError("Missing ELSE in IF statement")
+        
+        then_part = rest[:then_end].strip()
+        else_part = rest[then_end + 1:].strip()
+        
+        # Recursively handle nested IF statements in then_part and else_part
+        if " ? " in then_part:
+            then_part = convert_to_ternary(then_part)
+        if " ? " in else_part:
+            else_part = convert_to_ternary(else_part)
+        
+        # Ensure string literals are properly quoted
+        if then_part.isalpha() or (then_part.startswith('"') and then_part.endswith('"')):
+            then_part = f"'{then_part.strip('\"')}'"
+        if else_part.isalpha() or (else_part.startswith('"') and else_part.endswith('"')):
+            else_part = f"'{else_part.strip('\"')}'"
+        
+        return f"({then_part} if {condition} else {else_part})"
+
+    try:
+        result = convert_to_ternary(formula_str)
+        logger.info("Parsed IF statement: %s -> %s", formula_str, result)
+        return result
+    except Exception as e:
+        logger.error("Failed to parse IF statement '%s': %s", formula_str, str(e))
+        raise
+
+
+
 if st.session_state.current_project:
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Data Upload", "🛠️ Field Editor", "🔍 Data Explorer", "📊 Dashboard", "📜 Executive Summary"])
     
@@ -917,9 +1006,8 @@ if st.session_state.current_project:
             if uploaded_file:
                 try:
                     df = load_data(uploaded_file)
-                    for col in ['Order Date', 'Ship Date']:
-                        if col in df.columns:
-                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                    # Preprocess dates before saving and classifying
+                    df = preprocess_dates(df)
                     st.session_state.dataset = df
                     df.to_csv(f"projects/{st.session_state.current_project}/dataset.csv", index=False)
                     st.session_state.classified = False
@@ -1073,14 +1161,30 @@ if st.session_state.current_project:
             
             if input_mode == "Prompt-based (Plain English)":
                 st.markdown("#### Describe Your Calculation")
-                st.markdown("""
-                Examples:
-                - "Mark Sales as High if greater than 1000, otherwise Low"
-                - "Calculate the profit margin as Profit divided by Sales"
-                - "Flag outliers in Sales where Sales is more than 2 standard deviations above the average"
-                - "Calculate average Profit per Ship Mode and flag if above overall average"
-                - "If Sales is greater than 500 and Profit is positive, then High Performer, else if Sales is less than 200, then Low Performer, else Medium"
-                """)
+                
+                # Dynamically generate example prompts based on dataset columns
+                measures = st.session_state.field_types.get("measure", [])
+                dimensions = st.session_state.field_types.get("dimension", [])
+                
+                # Select representative columns (first measure and dimension if available)
+                sample_measure1 = measures[0] if measures else "Measure1"
+                sample_measure2 = measures[1] if len(measures) > 1 else "Measure2"
+                sample_dimension = dimensions[0] if dimensions else "Dimension1"
+                
+                # Define example templates with placeholders replaced by actual columns
+                examples = [
+                    f"Mark {sample_measure1} as High if greater than 1000, otherwise Low",
+                    f"Calculate the profit margin as {sample_measure1} divided by {sample_measure2}",
+                    f"Flag outliers in {sample_measure1} where {sample_measure1} is more than 2 standard deviations above the average",
+                    f"Calculate average {sample_measure1} per {sample_dimension} and flag if above overall average",
+                    f"If {sample_measure1} is greater than 500 and {sample_measure2} is positive, then High Performer, else if {sample_measure1} is less than 200, then Low Performer, else Medium"
+                ]
+                
+                # Display the examples
+                st.markdown("Examples:")
+                for example in examples:
+                    st.markdown(f"- {example}")
+                
                 calc_prompt = st.text_area("Describe Your Calculation in Plain Text:", value=calc_prompt, key="calc_prompt")
             else:
                 st.markdown("#### Enter Formula Directly")
@@ -1288,9 +1392,8 @@ if st.session_state.current_project:
             st.info("No dataset loaded. Please upload a dataset in the 'Data Upload' tab.")
         else:
             df = st.session_state.dataset.copy()
-            for col in ['Order Date', 'Ship Date']:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
+            # Preprocess dates to ensure consistency
+            df = preprocess_dates(df)
             
             if not st.session_state.classified:
                 try:
@@ -1306,7 +1409,7 @@ if st.session_state.current_project:
                     logger.info("Classified columns for dataset in project %s: dimensions=%s, measures=%s, dates=%s, ids=%s",
                                 st.session_state.current_project, dimensions, measures, dates, ids)
                 except Exception as e:
-                    st.error(f"Failed to classify columns: {str(e)}")
+                    st.error(f"Failed to classify columns: %s", str(e))
                     logger.error("Failed to classify columns: %s", str(e))
                     st.stop()
             
