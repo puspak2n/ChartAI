@@ -193,6 +193,9 @@ def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order=
     Returns a tuple of (chart_data, metric, dimension, working_df, table_columns, chart_type, secondary_dimension).
     """
     try:
+        # Initialize render_type to avoid unbound variable errors
+        render_type = "Bar"
+        
         # Parse the prompt
         metric, dimension, second_metric, trend, top_n, filters, outliers, exclude, secondary_dimension = rule_based_parse(prompt, dimensions, measures, dates, df)
         
@@ -261,9 +264,12 @@ def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order=
         if top_n and metric:
             logger.info("Applied top_n=%d", top_n)
             chart_data = chart_data.nlargest(top_n, metric)
+            # Ensure descending sort for top N
+            sort_order = "Descending"
         
         # Apply sorting
         if metric:
+            logger.info("Applying sort order: %s for metric: %s", sort_order, metric)
             if sort_order == "Descending":
                 chart_data = chart_data.sort_values(by=metric, ascending=False)
                 logger.info("Applied Descending sorting on chart_data by %s: rows=%d", metric, len(chart_data))

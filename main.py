@@ -1,3 +1,4 @@
+# main.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -21,10 +22,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Page Config
+# Page Config and CSS
 st.set_page_config(page_title="ChartGPT AI", page_icon="📊", layout="wide")
-
-# Load Custom CSS and Override to Remove Excessive Top Spacing
 load_custom_css()
 st.markdown("""
 <style>
@@ -126,6 +125,27 @@ st.markdown("""
     .sort-button:hover {
         background-color: #475569 !important;
     }
+    /* Fix for main content expander collapse button */
+    .main [data-testid="stExpander"] {
+        background-color: #F5F7FA !important;
+        border-radius: 8px !important;
+        margin-bottom: 1rem !important;
+    }
+    .main [data-testid="stExpander"] > div[role="button"] {
+        background-color: #334155 !important;
+        color: white !important;
+        border-radius: 8px !important;
+        padding: 0.5rem !important;
+        cursor: pointer !important;
+    }
+    .main [data-testid="stExpander"] > div[role="button"] p {
+        color: white !important;
+        font-weight: 500 !important;
+        margin: 0 !important;
+    }
+    .main [data-testid="stExpander"] > div[role="button"]:hover {
+        background-color: #475569 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -152,34 +172,29 @@ if "current_project" not in st.session_state:
 if "sidebar_collapsed" not in st.session_state:
     st.session_state.sidebar_collapsed = False
 if "sort_order" not in st.session_state:
-    st.session_state.sort_order = {}  # Now a dictionary mapping chart indices to sort orders
+    st.session_state.sort_order = {}
 if "insights_cache" not in st.session_state:
-    st.session_state.insights_cache = {}  # Cache for AI insights
+    st.session_state.insights_cache = {}
 if "sample_prompts" not in st.session_state:
     st.session_state.sample_prompts = []
 if "used_sample_prompts" not in st.session_state:
-    st.session_state.used_sample_prompts = []  # Track used sample prompts
+    st.session_state.used_sample_prompts = []
 if "sample_prompt_pool" not in st.session_state:
-    st.session_state.sample_prompt_pool = []  # Pool of available sample prompts
+    st.session_state.sample_prompt_pool = []
 if "last_used_pool_index" not in st.session_state:
-    st.session_state.last_used_pool_index = 0  # Track the last used index in the prompt pool
+    st.session_state.last_used_pool_index = 0
 if "onboarding_seen" not in st.session_state:
     st.session_state.onboarding_seen = False
 if "classified" not in st.session_state:
     st.session_state.classified = False
 if "last_manual_prompt" not in st.session_state:
-    st.session_state.last_manual_prompt = None  # Track the last manual prompt to avoid stale data
+    st.session_state.last_manual_prompt = None
 if "chart_dimensions" not in st.session_state:
-    st.session_state.chart_dimensions = {}  # Store selected dimensions for each chart
+    st.session_state.chart_dimensions = {}
 
-# Function to generate dynamic sample prompts without GPT
+# Generate Sample Prompts (unchanged)
 def generate_sample_prompts(dimensions, measures, dates, df, max_prompts=10):
-    """
-    Generate up to max_prompts unique sample prompts based on dataset columns.
-    """
     prompts = []
-    
-    # Select representative values for dimensions
     sample_segment = df['Segment'].iloc[0] if 'Segment' in df.columns else None
     sample_region = df['Region'].iloc[0] if 'Region' in df.columns else None
     sample_subcategory = df['Sub-Category'].iloc[0] if 'Sub-Category' in df.columns else None
@@ -188,27 +203,23 @@ def generate_sample_prompts(dimensions, measures, dates, df, max_prompts=10):
     sample_city = df['City'].iloc[0] if 'City' in df.columns else None
     sample_market = df['Market'].iloc[0] if 'Market' in df.columns else None
     
-    # Base prompts
-    # 1. Trend prompt (if dates are available)
     if dates and measures:
         date_col = dates[0]
-        for i, measure in enumerate(measures[:2]):  # Limit to 2 measures
-            dim = dimensions[i % len(dimensions)]  # Cycle through dimensions
+        for i, measure in enumerate(measures[:2]):
+            dim = dimensions[i % len(dimensions)]
             prompt = f"Show {measure} trend over {date_col} by {dim}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 2. Comparison (e.g., Profit Margin by Segment)
     if dimensions and measures:
-        for i, dim in enumerate(dimensions[:3]):  # Use up to 3 dimensions
+        for i, dim in enumerate(dimensions[:3]):
             prompt = f"Compare Profit Margin by {dim}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 3. Top N with filter (e.g., Top 5 Cities by Sales for a Customer)
     if dimensions and measures:
         dim = 'City' if 'City' in dimensions else dimensions[0]
-        for i, measure in enumerate(measures[:2]):  # Limit to 2 measures
+        for i, measure in enumerate(measures[:2]):
             if sample_customer and 'Customer Name' in dimensions:
                 prompt = f"Top 5 {dim} by {measure} for {sample_customer}"
             else:
@@ -216,75 +227,61 @@ def generate_sample_prompts(dimensions, measures, dates, df, max_prompts=10):
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 4. Outlier detection (e.g., Outliers in Profit by Sub-Category)
     if measures and dimensions:
         dim = 'Sub-Category' if 'Sub-Category' in dimensions else dimensions[0]
-        for i, measure in enumerate(measures[:2]):  # Limit to 2 measures
+        for i, measure in enumerate(measures[:2]):
             prompt = f"Find outliers in {measure} by {dim}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 5. Correlation (e.g., Quantity vs Profit by Market)
     if len(measures) >= 2 and dimensions:
         dim = 'Market' if 'Market' in dimensions else dimensions[0]
-        for i in range(min(2, len(measures) // 2)):  # Generate up to 2 correlation prompts
+        for i in range(min(2, len(measures) // 2)):
             measure1 = measures[i]
             measure2 = measures[(i + 1) % len(measures)]
             prompt = f"Compare {measure1} and {measure2} by {dim}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 6. Additional Top N without filter for variety
     if dimensions and measures:
         dim = 'Region' if 'Region' in dimensions else dimensions[1 % len(dimensions)]
-        for i, measure in enumerate(measures[1:3]):  # Use different measures
+        for i, measure in enumerate(measures[1:3]):
             prompt = f"Top 3 {dim} by {measure}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # 7. Aggregation prompts (e.g., Sales by Category)
     if dimensions and measures:
         dim = 'Category' if 'Category' in dimensions else dimensions[2 % len(dimensions)]
-        for i, measure in enumerate(measures[2:4]):  # Use different measures
+        for i, measure in enumerate(measures[2:4]):
             prompt = f"{measure} by {dim}"
             if prompt not in prompts:
                 prompts.append(prompt)
     
-    # Ensure we don't exceed max_prompts
     prompts = prompts[:max_prompts]
-    
-    # Add numbering to prompts (for display purposes later)
     numbered_prompts = [f"{i+1}. {prompt}" for i, prompt in enumerate(prompts)]
     logger.info("Generated rule-based sample prompts: %s", numbered_prompts)
     return numbered_prompts
 
-# Helper function to preprocess DataFrame for date columns
+# Preprocess Dates (unchanged)
 def preprocess_dates(df):
-    """
-    Preprocess the DataFrame to convert potential date columns to datetime.
-    This ensures date columns are detected even if their names differ from 'Order Date' or 'Ship Date'.
-    """
     for col in df.columns:
-        # Skip if already a datetime type
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             continue
-        # Attempt to convert string/object columns to datetime
         if pd.api.types.is_string_dtype(df[col]) or pd.api.types.is_object_dtype(df[col]):
             try:
                 converted = pd.to_datetime(df[col], errors='coerce')
                 non_na_ratio = converted.notna().mean()
-                if non_na_ratio > 0.8:  # At least 80% of values are valid dates
+                if non_na_ratio > 0.8:
                     df[col] = converted
                     logger.info("Preprocessed %s as potential date column (non-NaN ratio=%.2f)", col, non_na_ratio)
             except Exception as e:
                 logger.debug("Could not preprocess %s as date column: %s", col, str(e))
     return df
 
-# Sidebar
+# Sidebar (unchanged)
 with st.sidebar:
     st.title("ChartGPT AI")
     
-    # Projects Expander
     with st.expander("📂 Projects", expanded=True):
         if "projects" not in st.session_state:
             try:
@@ -302,18 +299,17 @@ with st.sidebar:
             try:
                 if os.path.exists(f"projects/{selected_project}/dataset.csv"):
                     df = pd.read_csv(f"projects/{selected_project}/dataset.csv")
-                    # Preprocess the DataFrame for date columns
                     df = preprocess_dates(df)
                     st.session_state.dataset = df
                     st.session_state.current_project = selected_project
                     st.success(f"Opened: {selected_project}")
                     logger.info("Opened project: %s", selected_project)
-                    st.session_state.classified = False  # Reset classification to re-run
-                    st.session_state.sample_prompts = []  # Reset sample prompts
-                    st.session_state.used_sample_prompts = []  # Reset used prompts
-                    st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                    st.session_state.last_used_pool_index = 0  # Reset pool index
-                    st.session_state.field_types = {}  # Reset field types
+                    st.session_state.classified = False
+                    st.session_state.sample_prompts = []
+                    st.session_state.used_sample_prompts = []
+                    st.session_state.sample_prompt_pool = []
+                    st.session_state.last_used_pool_index = 0
+                    st.session_state.field_types = {}
                 else:
                     st.error(f"No dataset found for project {selected_project}. Please upload a dataset.")
                     logger.warning("No dataset found for project: %s", selected_project)
@@ -333,10 +329,10 @@ with st.sidebar:
                         st.session_state.projects.append(new_project)
                         st.session_state.classified = False
                         st.session_state.sample_prompts = []
-                        st.session_state.used_sample_prompts = []  # Reset used prompts
-                        st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                        st.session_state.last_used_pool_index = 0  # Reset pool index
-                        st.session_state.field_types = {}  # Reset field types
+                        st.session_state.used_sample_prompts = []
+                        st.session_state.sample_prompt_pool = []
+                        st.session_state.last_used_pool_index = 0
+                        st.session_state.field_types = {}
                         st.success(f"Created: {new_project}")
                         logger.info("Created new project: %s", new_project)
                     except Exception as e:
@@ -346,10 +342,8 @@ with st.sidebar:
                     st.error("Project already exists.")
                     logger.warning("Attempted to create project %s, but it already exists", new_project)
     
-    # Sample Prompts Section (only if dataset is loaded)
     if st.session_state.dataset is not None:
         df = st.session_state.dataset.copy()
-        # Preprocess dates before classification
         df = preprocess_dates(df)
         st.session_state.dataset = df
         
@@ -377,11 +371,9 @@ with st.sidebar:
         
         if measures and dimensions:
             if not st.session_state.sample_prompt_pool:
-                # Generate a pool of up to 10 unique prompts
                 st.session_state.sample_prompt_pool = generate_sample_prompts(dimensions, measures, dates, df, max_prompts=10)
             
             if not st.session_state.sample_prompts:
-                # Initially display the first 5 prompts from the pool
                 st.session_state.sample_prompts = st.session_state.sample_prompt_pool[:5]
         
         st.markdown("### Sample Prompts")
@@ -389,16 +381,11 @@ with st.sidebar:
             st.info("All sample prompts have been used or no valid prompts can be generated due to missing dimensions/measures.")
         else:
             for idx, prompt in enumerate(st.session_state.sample_prompts):
-                # Extract the actual prompt text without numbering for comparison
                 prompt_text = prompt.split(". ", 1)[1] if ". " in prompt else prompt
                 if st.button(prompt, key=f"sidebar_sample_{idx}"):
-                    # Append the new chart to chart_history instead of replacing it
                     st.session_state.chart_history.append({"prompt": prompt_text})
-                    # Add the used prompt to the used_sample_prompts list (without numbering)
                     st.session_state.used_sample_prompts.append(prompt_text)
-                    # Remove the used prompt from the displayed list
                     st.session_state.sample_prompts.pop(idx)
-                    # Find the next unused prompt from the pool
                     found_new_prompt = False
                     start_index = st.session_state.last_used_pool_index
                     attempts = 0
@@ -406,7 +393,6 @@ with st.sidebar:
                         next_index = (start_index + attempts) % len(st.session_state.sample_prompt_pool)
                         next_prompt = st.session_state.sample_prompt_pool[next_index]
                         next_prompt_text = next_prompt.split(". ", 1)[1] if ". " in next_prompt else next_prompt
-                        # Check if the prompt (without numbering) is already used or displayed
                         already_used = next_prompt_text in st.session_state.used_sample_prompts
                         already_displayed = any(next_prompt_text == p.split(". ", 1)[1] for p in st.session_state.sample_prompts if ". " in p)
                         logger.info(
@@ -416,7 +402,6 @@ with st.sidebar:
                         if already_used or already_displayed:
                             attempts += 1
                             continue
-                        # Found an unused prompt
                         st.session_state.sample_prompts.append(next_prompt)
                         st.session_state.last_used_pool_index = (next_index + 1) % len(st.session_state.sample_prompt_pool)
                         found_new_prompt = True
@@ -424,17 +409,15 @@ with st.sidebar:
                         break
                     if not found_new_prompt:
                         logger.info("No new unused prompts found in the pool.")
-                        st.session_state.last_used_pool_index = 0  # Reset index if no new prompt found
-                    # Renumber the displayed prompts to ensure sequential numbering
+                        st.session_state.last_used_pool_index = 0
                     st.session_state.sample_prompts = [f"{i+1}. {p.split('. ', 1)[1] if '. ' in p else p}" for i, p in enumerate(st.session_state.sample_prompts)]
                     logger.info(
                         "User selected sidebar sample prompt: %s, replaced with: %s",
                         prompt_text,
                         st.session_state.sample_prompts[-1] if st.session_state.sample_prompts else "None"
                     )
-                    st.rerun()  # Force rerun to ensure chart renders immediately
+                    st.rerun()
     
-    # About Expander
     with st.expander("ℹ️ About", expanded=False):
         st.markdown("""
         **ChartGPT AI** is an AI-powered business intelligence platform that transforms data into actionable insights using natural language. Ask questions, visualize data, and uncover trends effortlessly.
@@ -447,7 +430,7 @@ if st.session_state.current_project:
 else:
     st.warning("No project selected. Please create or open a project in the sidebar.")
 
-# Onboarding Modal
+# Onboarding Modal (unchanged)
 if not st.session_state.onboarding_seen:
     with st.container():
         st.markdown("""
@@ -467,33 +450,24 @@ if not st.session_state.onboarding_seen:
             st.session_state.onboarding_seen = True
             logger.info("User completed onboarding")
 
-# Function to Save Dataset Changes
+# Save Dataset Changes (unchanged)
 def save_dataset_changes():
-    """
-    Save changes to the dataset for the current project.
-    """
     if st.session_state.current_project and st.session_state.dataset is not None:
         try:
             st.session_state.dataset.to_csv(f"projects/{st.session_state.current_project}/dataset.csv", index=False)
-            # Do not reset classified flag to preserve user changes
             logger.info("Saved dataset changes for project: %s", st.session_state.current_project)
         except Exception as e:
             st.error(f"Failed to save dataset: {str(e)}")
             logger.error("Failed to save dataset for project %s: %s", st.session_state.current_project, str(e))
 
+# Generate GPT Insights (unchanged)
 def generate_gpt_insights(stats, metric, prompt, chart_data, dimension=None, second_metric=None):
-    """
-    Generate enhanced, diverse insights using OpenAI GPT, covering trends, comparisons, outliers, and balanced strategies.
-    Use caching to avoid regenerating insights unnecessarily.
-    """
-    # Create a cache key based on prompt, metric, dimension, and chart data hash
     cache_key = f"{prompt}_{metric}_{dimension}_{chart_data.to_json()}"
     if cache_key in st.session_state.insights_cache:
         logger.info("Retrieved cached insights for prompt: %s", prompt)
         return st.session_state.insights_cache[cache_key]
 
     if not USE_OPENAI:
-        logger.info("Using hard-coded insights as OpenAI is not available.")
         insights = [
             f"The average {metric} is {stats['mean']:.2f}.",
             f"The standard deviation of {metric} is {stats['std_dev']:.2f}, indicating the spread of data.",
@@ -542,12 +516,9 @@ def generate_gpt_insights(stats, metric, prompt, chart_data, dimension=None, sec
         st.session_state.insights_cache[cache_key] = insights
         return insights
 
+# Generate Executive Summary (unchanged)
 def generate_executive_summary(chart_history, df, dimensions, measures, dates):
-    """
-    Generate an executive summary based on the chart history prompts and their insights.
-    """
     if not USE_OPENAI:
-        logger.info("Using hard-coded executive summary as OpenAI is not available.")
         return [
             "Analysis Overview: Reviewed multiple aspects of the dataset.",
             "Key Finding: Sales performance varies significantly across categories.",
@@ -555,7 +526,6 @@ def generate_executive_summary(chart_history, df, dimensions, measures, dates):
         ]
 
     try:
-        # Collect all insights from chart history
         all_insights = []
         for idx, chart_obj in enumerate(chart_history):
             prompt = chart_obj["prompt"]
@@ -601,12 +571,9 @@ def generate_executive_summary(chart_history, df, dimensions, measures, dates):
             "Recommendation: Focus on high-performing categories to maximize revenue."
         ]
 
+# Generate Overall Data Analysis (unchanged)
 def generate_overall_data_analysis(df, dimensions, measures, dates):
-    """
-    Generate an overall data analysis and findings summary for the dataset.
-    """
     if not USE_OPENAI:
-        logger.info("Using hard-coded overall data analysis as OpenAI is not available.")
         return [
             "Dataset contains various dimensions and measures for analysis.",
             "Sales and Profit show significant variability across categories.",
@@ -614,7 +581,6 @@ def generate_overall_data_analysis(df, dimensions, measures, dates):
         ]
 
     try:
-        # Gather key statistics for all measures
         stats_summary = []
         for metric in measures:
             if metric in df.columns and pd.api.types.is_numeric_dtype(df[metric]):
@@ -625,7 +591,6 @@ def generate_overall_data_analysis(df, dimensions, measures, dates):
                     f"90th percentile={stats['percentile_90']:.2f}"
                 )
         
-        # Analyze top performers for key dimensions
         top_performers = []
         for dim in dimensions:
             for metric in measures:
@@ -636,7 +601,6 @@ def generate_overall_data_analysis(df, dimensions, measures, dates):
                         top_value = grouped.iloc[0]
                         top_performers.append(f"Top {dim} by {metric}: {top} with average {top_value:.2f}")
 
-        # Compute correlations between measures
         correlations = []
         for i, m1 in enumerate(measures):
             for m2 in measures[i+1:]:
@@ -673,24 +637,18 @@ def generate_overall_data_analysis(df, dimensions, measures, dates):
             "Consider focusing on top performers to drive business growth."
         ]
 
-
+# Display Chart (unchanged)
 def display_chart(idx, prompt, dimensions, measures, dates, df):
-    """
-    Display a chart with title on the left, and chart type toggle, sort button, and remove button on the right in the same row.
-    """
     try:
-        # Initialize sort order for this chart
         if idx not in st.session_state.sort_order:
             st.session_state.sort_order[idx] = "Descending"
 
-        # Layout: Title on the left, controls on the right
         col1, col2, col3, col4 = st.columns([2.5, 1, 0.5, 0.5])
         
         with col1:
             st.subheader(prompt)
 
         with col2:
-            # Chart type dropdown
             chart_types = ["Bar", "Line", "Scatter", "Map", "Table", "Pie"]
             default_index = 0
             if " vs " in prompt.lower():
@@ -706,12 +664,10 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
             )
 
         with col3:
-            # Sort button (toggles between Ascending and Descending)
             sort_label = f"Sort: {st.session_state.sort_order[idx]}"
             if st.button(sort_label, key=f"sort_button_{idx}", help="Toggle sorting order"):
                 st.session_state.sort_order[idx] = "Ascending" if st.session_state.sort_order[idx] == "Descending" else "Descending"
                 logger.info("Toggled sort order for chart %d to %s", idx, st.session_state.sort_order[idx])
-            # Apply custom CSS class to the sort button
             st.markdown(
                 f"""
                 <script>
@@ -722,7 +678,6 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
             )
 
         with col4:
-            # Remove button
             if st.button("🗑️", key=f"remove_chart_{idx}"):
                 st.session_state.chart_history.pop(idx)
                 if idx in st.session_state.sort_order:
@@ -731,36 +686,29 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 st.rerun()
                 return
 
-        # Call render_chart with the selected chart type and sort order
         chart_result = render_chart(idx, prompt, dimensions, measures, dates, df, sort_order=st.session_state.sort_order[idx], chart_type=selected_chart_type)
         if chart_result is None:
             st.error(f"Failed to render chart for prompt: '{prompt}'. Please check the prompt or data.")
             logger.error("Chart result is None for prompt: %s", prompt)
             return
         
-        # Unpack the 7 values returned by render_chart
         chart_data, metric, dimension, working_df, table_columns, chart_type, secondary_dimension = chart_result
         
-        # Define second_metric for insights generation
         second_metric = None
         for col in measures:
             if col in chart_data.columns and col != metric:
                 second_metric = col
                 break
         
-        # Log chart data before processing
         logger.info("Chart data before processing: rows=%d, columns=%s", len(chart_data), chart_data.columns.tolist())
         
-        # Check if the dimension has more than 25 unique values or fewer than 5 for Pie chart
         unique_values = len(chart_data[dimension].unique()) if dimension in chart_data.columns else 0
-        render_type = chart_type  # The type we'll actually render
+        render_type = chart_type
 
-        # Handle Text-based Results (e.g., Correlation)
         if render_type == "Text":
             st.write(f"**Result:** {chart_data.iloc[0, 0]:.2f}")
             logger.info("Rendered chart %d as Text result", idx)
         
-        # Render the chart based on render_type
         elif render_type == "Scatter":
             if second_metric and dimension in chart_data.columns:
                 fig = px.scatter(
@@ -776,7 +724,6 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
                 st.warning("Scatter plot requires two metrics and a dimension. Falling back to Bar chart.")
                 logger.warning("Second metric not found for scatter plot in chart %d, falling back to Bar", idx)
                 if dimension in chart_data.columns:
-                    # Check again for unique values after fallback
                     unique_values = len(chart_data[dimension].unique())
                     if unique_values > 25 and selected_chart_type != "Table":
                         render_type = "Table"
@@ -907,13 +854,11 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
             logger.error("Invalid chart type %s or insufficient data for chart %d", chart_type, idx)
             return
         
-        # Show data toggle using an expander
         with st.expander("Show Data"):
             st.write("Chart Data:")
             st.dataframe(chart_data)
             logger.info("Displayed raw chart data for chart %d", idx)
         
-        # Generate enhanced insights
         if metric in working_df.columns and pd.api.types.is_numeric_dtype(working_df[metric]):
             stats = calculate_statistics(working_df, metric)
             if stats:
@@ -928,13 +873,8 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
         st.error(f"Error rendering chart {idx}: {str(e)}")
         logger.error("Error rendering chart %d: %s", idx, str(e))
 
-# Convert IF-THEN-ELSE-END syntax to Python-compatible expression
+# Parse IF Statement (unchanged)
 def parse_if_statement(formula_str):
-    """
-    Convert IF-THEN-ELSE-END syntax to a Python-compatible ternary expression.
-    Handles nested IF statements recursively.
-    """
-    # Replace keywords and operators
     formula_str = formula_str.replace("IF ", "").replace(" THEN ", " ? ").replace(" ELSE ", " : ").replace(" END", "")
     formula_str = formula_str.replace(" AND ", " and ").replace(" OR ", " or ")
     
@@ -942,7 +882,6 @@ def parse_if_statement(formula_str):
         if " ? " not in expr or " : " not in expr:
             return expr
         
-        # Split on the first ' ? ' to separate condition
         parts = expr.split(" ? ", 1)
         if len(parts) < 2:
             logger.error("Invalid IF statement syntax: %s", expr)
@@ -951,7 +890,6 @@ def parse_if_statement(formula_str):
         condition = parts[0].strip()
         rest = parts[1]
         
-        # Find the corresponding ' : ' for this IF, accounting for nested IFs
         depth = 0
         then_end = -1
         for i, char in enumerate(rest):
@@ -970,13 +908,11 @@ def parse_if_statement(formula_str):
         then_part = rest[:then_end].strip()
         else_part = rest[then_end + 1:].strip()
         
-        # Recursively handle nested IF statements in then_part and else_part
         if " ? " in then_part:
             then_part = convert_to_ternary(then_part)
         if " ? " in else_part:
             else_part = convert_to_ternary(else_part)
         
-        # Ensure string literals are properly quoted
         if then_part.isalpha() or (then_part.startswith('"') and then_part.endswith('"')):
             then_part = f"'{then_part.strip('\"')}'"
         if else_part.isalpha() or (else_part.startswith('"') and else_part.endswith('"')):
@@ -992,40 +928,57 @@ def parse_if_statement(formula_str):
         logger.error("Failed to parse IF statement '%s': %s", formula_str, str(e))
         raise
 
-
-
+# Tabs
 if st.session_state.current_project:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Data Upload", "🛠️ Field Editor", "🔍 Data Explorer", "📊 Dashboard", "📜 Executive Summary"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Data", "🛠️ Field Editor", "📈 Dashboard", "📜 Executive Summary"])
     
     with tab1:
-        if st.session_state.current_project:
-            st.subheader("📊 Add Data to Project")
+        st.subheader("📊 Data Management")
+        
+        st.markdown("### 📤 Upload Dataset")
+        with st.container():
             uploaded_file = st.file_uploader("Upload CSV:", type=["csv"], key="upload_csv_unique")
             if uploaded_file:
                 try:
                     df = load_data(uploaded_file)
-                    # Preprocess dates before saving and classifying
                     df = preprocess_dates(df)
                     st.session_state.dataset = df
                     df.to_csv(f"projects/{st.session_state.current_project}/dataset.csv", index=False)
                     st.session_state.classified = False
                     st.session_state.sample_prompts = []
-                    st.session_state.used_sample_prompts = []  # Reset used prompts
-                    st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                    st.session_state.last_used_pool_index = 0  # Reset pool index
-                    st.session_state.field_types = {}  # Reset field types to reclassify
+                    st.session_state.used_sample_prompts = []
+                    st.session_state.sample_prompt_pool = []
+                    st.session_state.last_used_pool_index = 0
+                    st.session_state.field_types = {}
                     st.success("✅ Dataset uploaded!")
                     logger.info("Uploaded dataset for project: %s", st.session_state.current_project)
                 except Exception as e:
                     st.error(f"Failed to upload dataset: {str(e)}")
                     logger.error("Failed to upload dataset for project %s: %s", st.session_state.current_project, str(e))
+        
+        st.markdown("### 🔍 Explore Data")
+        with st.container():
+            if st.session_state.dataset is not None:
+                df = st.session_state.dataset
+                st.markdown("#### 📄 Dataset Preview (Top 100 Rows)")
+                st.dataframe(df.head(100), use_container_width=True)
+                
+                st.markdown("#### 🧭 Unique Values by Dimension")
+                dimensions = st.session_state.field_types.get("dimension", [])
+                for dim in dimensions:
+                    if dim in df.columns:
+                        unique_vals = df[dim].dropna().unique()[:10]
+                        st.markdown(f"**{dim}**: {', '.join(map(str, unique_vals))}")
+                    else:
+                        logger.warning("Dimension %s not found in DataFrame columns", dim)
+            else:
+                st.info("No dataset uploaded or selected. Please upload a CSV or select a project.")
     
     with tab2:
         if st.session_state.dataset is not None:
             st.subheader("🛠️ Field Editor")
             df = st.session_state.dataset
 
-            # Ensure field types are classified before proceeding
             if not st.session_state.classified:
                 try:
                     dimensions, measures, dates, ids = classify_columns(df, st.session_state.field_types)
@@ -1045,7 +998,7 @@ if st.session_state.current_project:
                     st.stop()
 
             st.markdown("### 🔧 Manage Fields and Types")
-            with st.expander("Manage Fields and Types"):
+            with st.expander("Manage Fields and Types", expanded=False):
                 for col in df.columns:
                     col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
                     with col1:
@@ -1078,9 +1031,9 @@ if st.session_state.current_project:
                                     st.session_state.field_types[new_type.lower()].append(col)
                             save_dataset_changes()
                             st.session_state.sample_prompts = []
-                            st.session_state.used_sample_prompts = []  # Reset used prompts
-                            st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                            st.session_state.last_used_pool_index = 0  # Reset pool index
+                            st.session_state.used_sample_prompts = []
+                            st.session_state.sample_prompt_pool = []
+                            st.session_state.last_used_pool_index = 0
                             st.success(f"Field {col} type changed to {new_type}!")
                             logger.info("Changed field type for %s to %s", col, new_type)
                     with col3:
@@ -1104,9 +1057,9 @@ if st.session_state.current_project:
                                         st.session_state.field_types[t].append(new_name)
                                 save_dataset_changes()
                                 st.session_state.sample_prompts = []
-                                st.session_state.used_sample_prompts = []  # Reset used prompts
-                                st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                                st.session_state.last_used_pool_index = 0  # Reset pool index
+                                st.session_state.used_sample_prompts = []
+                                st.session_state.sample_prompt_pool = []
+                                st.session_state.last_used_pool_index = 0
                                 st.success(f"Field renamed to {new_name}!")
                                 logger.info("Renamed field %s to %s", col, new_name)
                     with col4:
@@ -1118,9 +1071,9 @@ if st.session_state.current_project:
                                     st.session_state.field_types[t].remove(col)
                             save_dataset_changes()
                             st.session_state.sample_prompts = []
-                            st.session_state.used_sample_prompts = []  # Reset used prompts
-                            st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                            st.session_state.last_used_pool_index = 0  # Reset pool index
+                            st.session_state.used_sample_prompts = []
+                            st.session_state.sample_prompt_pool = []
+                            st.session_state.last_used_pool_index = 0
                             st.success(f"Field {col} deleted!")
                             logger.info("Deleted field: %s", col)
 
@@ -1159,17 +1112,12 @@ if st.session_state.current_project:
             
             if input_mode == "Prompt-based (Plain English)":
                 st.markdown("#### Describe Your Calculation")
-                
-                # Dynamically generate example prompts based on dataset columns
                 measures = st.session_state.field_types.get("measure", [])
                 dimensions = st.session_state.field_types.get("dimension", [])
-                
-                # Select representative columns (first measure and dimension if available)
                 sample_measure1 = measures[0] if measures else "Measure1"
                 sample_measure2 = measures[1] if len(measures) > 1 else "Measure2"
                 sample_dimension = dimensions[0] if dimensions else "Dimension1"
                 
-                # Define example templates with placeholders replaced by actual columns
                 examples = [
                     f"Mark {sample_measure1} as High if greater than 1000, otherwise Low",
                     f"Calculate the profit margin as {sample_measure1} divided by {sample_measure2}",
@@ -1178,7 +1126,6 @@ if st.session_state.current_project:
                     f"If {sample_measure1} is greater than 500 and {sample_measure2} is positive, then High Performer, else if {sample_measure1} is less than 200, then Low Performer, else Medium"
                 ]
                 
-                # Display the examples
                 st.markdown("Examples:")
                 for example in examples:
                     st.markdown(f"- {example}")
@@ -1209,7 +1156,6 @@ if st.session_state.current_project:
                     logger.warning("User attempted to create a calculated field without a description or formula")
                 else:
                     with st.spinner("Processing calculation..."):
-                        # Flag to control whether to proceed with formula evaluation
                         proceed_with_evaluation = True
 
                         if input_mode == "Prompt-based (Plain English)":
@@ -1228,49 +1174,39 @@ if st.session_state.current_project:
                             proceed_with_evaluation = False
 
                         if proceed_with_evaluation:
-                            # Handle assignment-style formulas (e.g., "Profit Margin = Profit / Sales")
                             if '=' in formula:
-                                # Split on the first '=' to separate the field name (if any) from the expression
                                 parts = formula.split('=', 1)
                                 if len(parts) == 2:
-                                    formula = parts[1].strip()  # Use the expression part for evaluation
+                                    formula = parts[1].strip()
                                 else:
                                     st.error("Invalid formula format.")
                                     logger.warning("Invalid formula format: %s", formula)
                                     proceed_with_evaluation = False
 
                             if proceed_with_evaluation:
-                                # Remove square brackets from column names
                                 for col in df.columns:
                                     formula = formula.replace(f"[{col}]", col)
                                 
-                                # Preprocess aggregate functions (AVG, STDEV, etc.) and handle PER keyword
                                 working_df = df.copy()
                                 formula_modified = formula
                                 group_averages = {}
                                 overall_avg = None
                                 group_dim = None
                                 
-                                # Handle PER keyword for group-wise averages
                                 per_match = re.search(r'AVG\((\w+)\)\s+PER\s+(\w+(?:\s+\w+)*)', formula_modified, re.IGNORECASE)
                                 if per_match:
-                                    agg_col = per_match.group(1)  # Column to aggregate (e.g., Profit)
-                                    group_dim = per_match.group(2)  # Dimension to group by (e.g., Ship Mode)
+                                    agg_col = per_match.group(1)
+                                    group_dim = per_match.group(2)
                                     if agg_col in working_df.columns and group_dim in working_df.columns:
-                                        # Compute the overall average for comparison
                                         overall_avg = working_df[agg_col].mean()
-                                        # Compute group-wise averages
                                         group_averages = working_df.groupby(group_dim)[agg_col].mean().to_dict()
-                                        # Replace AVG(Profit) with the overall average in the formula
                                         formula_modified = formula_modified.replace(f"AVG({agg_col})", str(overall_avg))
-                                        # Remove the PER Ship Mode part from the formula
                                         formula_modified = re.sub(r'\s+PER\s+\w+(?:\s+\w+)*', '', formula_modified)
                                     else:
                                         st.error("Invalid columns in PER expression.")
                                         logger.error("Invalid columns in PER expression: %s, %s", agg_col, group_dim)
                                         proceed_with_evaluation = False
                                 else:
-                                    # Handle standalone aggregates (AVG, STDEV)
                                     for col in df.columns:
                                         if f"AVG({col})" in formula_modified:
                                             avg_value = working_df[col].mean()
@@ -1280,66 +1216,17 @@ if st.session_state.current_project:
                                             formula_modified = formula_modified.replace(f"STDEV({col})", str(std_value))
                                 
                                 if proceed_with_evaluation:
-                                    # Convert IF-THEN-ELSE-END syntax to Python-compatible expression
-                                    def parse_if_statement(formula_str):
-                                        # Replace keywords and operators
-                                        formula_str = formula_str.replace("IF ", "").replace(" THEN ", " ? ").replace(" ELSE ", " : ")
-                                        formula_str = formula_str.replace(" AND ", " and ").replace(" OR ", " or ")
-                                        
-                                        # Handle nested IF statements recursively
-                                        def convert_to_ternary(expr):
-                                            if " ? " not in expr or " : " not in expr:
-                                                return expr
-                                            
-                                            # Find the first complete IF-THEN-ELSE block
-                                            parts = expr.split(" ? ", 1)
-                                            if len(parts) < 2:
-                                                return expr
-                                            condition = parts[0].strip()
-                                            rest = parts[1]
-                                            
-                                            then_end = rest.find(" : ")
-                                            if then_end == -1:
-                                                return expr
-                                            then_part = rest[:then_end].strip()
-                                            else_part = rest[then_end + 3:].strip()
-                                            
-                                            # Check for nested IF in the else part
-                                            if " ? " in else_part and " : " in else_part:
-                                                else_part = convert_to_ternary(else_part)
-                                            
-                                            # Remove END keyword if present
-                                            else_part = else_part.replace(" END", "").strip()
-                                            
-                                            # Ensure string literals are properly quoted
-                                            if then_part.startswith('"') or then_part.isalpha():
-                                                then_part = f"'{then_part}'" if not (then_part.startswith("'") or then_part.startswith('"')) else then_part
-                                            if else_part.startswith('"') or else_part.isalpha():
-                                                else_part = f"'{else_part}'" if not (else_part.startswith("'") or else_part.startswith('"')) else else_part
-                                            
-                                            return f"({then_part} if {condition} else {else_part})"
-
-                                        # Recursively convert all IF statements
-                                        result = formula_str
-                                        while " ? " in result and " : " in result:
-                                            result = convert_to_ternary(result)
-                                        return result
-
                                     formula_modified = parse_if_statement(formula_modified)
-
                                     st.markdown(f"**Formula Used:** `{formula}`")
                                     st.markdown(f"**Processed Formula:** `{formula_modified}`")
                                     try:
-                                        # Evaluate the formula using apply instead of eval to handle string outputs
                                         def evaluate_row(row):
                                             local_vars = row.to_dict()
-                                            # If group averages exist, replace the group average in the condition
                                             if group_averages and group_dim in local_vars:
                                                 group_value = group_averages.get(local_vars[group_dim], overall_avg)
                                                 condition_expr = formula_modified
                                                 for col in df.columns:
                                                     condition_expr = condition_expr.replace(col, str(local_vars.get(col, 0)))
-                                                # Replace the overall average with the group average in the condition
                                                 condition_expr = condition_expr.replace(str(overall_avg), str(group_value))
                                                 return eval(condition_expr, {"__builtins__": None}, {})
                                             else:
@@ -1357,9 +1244,9 @@ if st.session_state.current_project:
                                                     st.session_state.field_types["dimension"].append(new_field_name)
                                             save_dataset_changes()
                                             st.session_state.sample_prompts = []
-                                            st.session_state.used_sample_prompts = []  # Reset used prompts
-                                            st.session_state.sample_prompt_pool = []  # Reset prompt pool
-                                            st.session_state.last_used_pool_index = 0  # Reset pool index
+                                            st.session_state.used_sample_prompts = []
+                                            st.session_state.sample_prompt_pool = []
+                                            st.session_state.last_used_pool_index = 0
                                             st.success(f"New field {new_field_name} created!")
                                             logger.info("Created new calculated field %s with formula: %s", new_field_name, formula)
                                         else:
@@ -1370,27 +1257,10 @@ if st.session_state.current_project:
                                         logger.error("Failed to evaluate formula: %s", str(e))
 
     with tab3:
-        if st.session_state.dataset is not None:
-            st.subheader("🔍 Data Explorer")
-            df = st.session_state.dataset
-            st.markdown("### 📄 Dataset Preview (Top 100 Rows)")
-            st.dataframe(df.head(100))
-            
-            st.markdown("### 🧭 Unique Values by Dimension")
-            dimensions = st.session_state.field_types.get("dimension", [])
-            for dim in dimensions:
-                if dim in df.columns:
-                    unique_vals = df[dim].dropna().unique()[:10]
-                    st.markdown(f"**{dim}**: {', '.join(map(str, unique_vals))}")
-                else:
-                    logger.warning("Dimension %s not found in DataFrame columns", dim)
-    
-    with tab4:
         if st.session_state.dataset is None:
-            st.info("No dataset loaded. Please upload a dataset in the 'Data Upload' tab.")
+            st.info("No dataset loaded. Please upload a dataset in the 'Data' tab.")
         else:
             df = st.session_state.dataset.copy()
-            # Preprocess dates to ensure consistency
             df = preprocess_dates(df)
             
             if not st.session_state.classified:
@@ -1435,9 +1305,7 @@ if st.session_state.current_project:
                 if not st.session_state.chart_history:
                     st.markdown("No recent charts to display.")
                 else:
-                    # Export to PDF button for Dashboard
                     if st.button("📄 Export Dashboard to PDF", key="export_dashboard_pdf"):
-                        # Generating LaTeX content for the Dashboard tab
                         latex_content = []
                         latex_content.append(r"\documentclass{article}")
                         latex_content.append(r"\usepackage{geometry}")
@@ -1459,7 +1327,6 @@ if st.session_state.current_project:
                             chart_result = render_chart(idx, prompt_text, dimensions, measures, dates, df)
                             if chart_result:
                                 chart_data, metric, dimension, working_df, table_columns, chart_type, _ = chart_result
-                                # Add chart data as a table
                                 latex_content.append(r"\begin{longtable}{|l|r|}")
                                 latex_content.append(r"\hline")
                                 latex_content.append(r"\textbf{" + dimension.replace("_", r"\_") + "} & \textbf{" + metric.replace("_", r"\_") + r"} \\")
@@ -1469,7 +1336,6 @@ if st.session_state.current_project:
                                 latex_content.append(r"\hline")
                                 latex_content.append(r"\end{longtable}")
 
-                                # Add insights
                                 stats = calculate_statistics(working_df, metric) if metric in working_df.columns else None
                                 second_metric = None
                                 for col in measures:
@@ -1487,7 +1353,6 @@ if st.session_state.current_project:
                         latex_content.append(r"\end{document}")
                         latex_content = "\n".join(latex_content)
 
-                        # Export LaTeX content to PDF (handled by system)
                         st.session_state[f"dashboard_pdf_content"] = latex_content
                         st.markdown(
                             f"""
@@ -1500,7 +1365,6 @@ if st.session_state.current_project:
                             unsafe_allow_html=True
                         )
 
-                    # Display charts
                     for idx, chart_obj in enumerate(st.session_state.chart_history):
                         prompt_text = chart_obj["prompt"]
                         display_chart(idx, prompt_text, dimensions, measures, dates, df)
@@ -1508,7 +1372,6 @@ if st.session_state.current_project:
                 with st.container():
                     st.markdown('<div class="fixed-bottom">', unsafe_allow_html=True)
                     user_prompt = st.text_input("💬 Ask about your data (e.g., 'Top 5 Cities by Sales' or 'Find outliers in Sales'):", key="manual_prompt")
-                    # Move "Available Fields" under the prompt box
                     st.markdown("#### 🧭 Available Fields")
                     st.markdown(f"**Dimensions:** {', '.join(dimensions)}")
                     st.markdown(f"**Measures:** {', '.join(measures)}")
@@ -1516,11 +1379,10 @@ if st.session_state.current_project:
                     
                     if st.button("🔎 Generate Chart", key="manual_prompt_button"):
                         if user_prompt:
-                            # Reset any previous chart parameters to avoid stale data
                             st.session_state.last_manual_prompt = user_prompt
                             st.session_state.chart_history.append({"prompt": user_prompt})
                             logger.info("User generated chart with manual prompt: %s", user_prompt)
-                            st.rerun()  # Force rerun to ensure chart renders immediately
+                            st.rerun()
                     st.markdown('</div>', unsafe_allow_html=True)
             
                 if st.button("💾 Save Dashboard", key="save_dashboard"):
@@ -1533,19 +1395,17 @@ if st.session_state.current_project:
                         st.error(f"Failed to save dashboard: {str(e)}")
                         logger.error("Failed to save dashboard for project %s: %s", st.session_state.current_project, str(e))
     
-    with tab5:
+    with tab4:
         st.subheader("📜 Executive Summary")
         if st.session_state.dataset is None:
-            st.info("No dataset loaded. Please upload a dataset in the 'Data Upload' tab to view the executive summary.")
+            st.info("No dataset loaded. Please upload a dataset in the 'Data' tab to view the executive summary.")
         else:
             df = st.session_state.dataset.copy()
             dimensions = st.session_state.field_types.get("dimension", [])
             measures = st.session_state.field_types.get("measure", [])
             dates = st.session_state.field_types.get("date", [])
 
-            # Export to PDF button for Executive Summary
             if st.button("📄 Export Executive Summary to PDF", key="export_summary_pdf"):
-                # Generating LaTeX content for the Executive Summary tab
                 latex_content = []
                 latex_content.append(r"\documentclass{article}")
                 latex_content.append(r"\usepackage{geometry}")
@@ -1581,7 +1441,6 @@ if st.session_state.current_project:
                 latex_content.append(r"\end{document}")
                 latex_content = "\n".join(latex_content)
 
-                # Export LaTeX content to PDF (handled by system)
                 st.session_state[f"summary_pdf_content"] = latex_content
                 st.markdown(
                     f"""
@@ -1594,7 +1453,6 @@ if st.session_state.current_project:
                     unsafe_allow_html=True
                 )
 
-            # Display the Executive Summary content
             st.markdown("### 📝 Summary of Dashboard Analysis")
             if not st.session_state.chart_history:
                 st.markdown("No analysis performed yet. Please generate charts in the 'Dashboard' tab to see a summary.")
