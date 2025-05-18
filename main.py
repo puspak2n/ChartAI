@@ -129,6 +129,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+def load_openai_key():
+    try:
+        return st.secrets["OPENAI_API_KEY"]
+    except KeyError:
+        return None
+
 # Load OpenAI Key
 openai.api_key = load_openai_key()
 USE_OPENAI = openai.api_key is not None
@@ -747,15 +754,6 @@ def display_chart(idx, prompt, dimensions, measures, dates, df):
         # Check if the dimension has more than 25 unique values or fewer than 5 for Pie chart
         unique_values = len(chart_data[dimension].unique()) if dimension in chart_data.columns else 0
         render_type = chart_type  # The type we'll actually render
-        if chart_type in ["Bar", "Line", "Scatter", "Pie"]:
-            if unique_values > 25 and selected_chart_type != "Table":
-                render_type = "Table"
-                st.warning(f"Switched to Table because the dimension '{dimension}' has {unique_values} unique values (> 25). Select 'Table' in the dropdown to avoid this warning.")
-                logger.info("Switched chart %d to Table due to %d unique values in dimension %s", idx, unique_values, dimension)
-            elif unique_values < 5 and chart_type != "Pie" and selected_chart_type != "Table":
-                render_type = "Pie"
-                st.info(f"Switched to Pie chart because the dimension '{dimension}' has {unique_values} unique values (< 5).")
-                logger.info("Switched chart %d to Pie due to %d unique values in dimension %s", idx, unique_values, dimension)
 
         # Handle Text-based Results (e.g., Correlation)
         if render_type == "Text":

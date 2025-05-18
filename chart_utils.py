@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 from calc_utils import detect_outliers
 
-def rule_based_parse(prompt, dimensions, measures, dates):
+def rule_based_parse(prompt, dimensions, measures, dates, df):
     """
     Parse a natural language prompt into chart parameters using rule-based logic.
     Returns a tuple of (metric, dimension, second_metric, trend, top_n, filters, outliers, exclude, secondary_dimension).
@@ -118,14 +118,39 @@ def rule_based_parse(prompt, dimensions, measures, dates):
             outliers = True
         
         # Extract filters (e.g., "for Aaron Bergman")
-        for dim in dimensions:
-            dim_lower = dim.lower()
-            if "for " in prompt_lower:
-                filter_match = re.search(rf'for (.+?)(?:\s+by|\s*$)', prompt_lower)
-                if filter_match:
-                    filter_value = filter_match.group(1).strip()
-                    filters[dim] = filter_value
-                    break
+        if "for " in prompt_lower:
+            filter_match = re.search(rf'for (.+?)(?:\s+by|\s*$)', prompt_lower)
+            if filter_match:
+                filter_value = filter_match.group(1).strip()
+                # Handle common aliases
+                if filter_value.lower() == 'customer':
+                    filter_value = 'Consumer'  # Map 'customer' to 'Consumer' for Segment
+                # Prioritize Customer Name
+                if 'Customer Name' in dimensions and 'Customer Name' in df.columns:
+                    if df['Customer Name'].dtype == 'object':  # Check for string type
+                        unique_customers = df['Customer Name'].dropna().str.lower().unique()
+                        if filter_value.lower() in unique_customers:
+                            filters['Customer Name'] = filter_value
+                            logger.info("Applied filter: Customer Name=%s", filter_value)
+                # Fallback to other dimensions
+                for dim in dimensions:
+                    if dim != 'Customer Name' and dim in df.columns:
+                        if df[dim].dtype == 'object':  # Check for string type
+                            unique_vals = df[dim].dropna().str.lower().unique()
+                            if filter_value.lower() in unique_vals:
+                                filters[dim] = filter_value
+                                logger.info("Applied filter: %s=%s", dim, filter_value)
+                                break
+                        elif df[dim].dtype in ['int64', 'float64']:  # Handle numeric dimensions
+                            try:
+                                filter_num = float(filter_value)
+                                unique_vals = df[dim].dropna().astype(float).unique()
+                                if filter_num in unique_vals:
+                                    filters[dim] = filter_value
+                                    logger.info("Applied filter: %s=%s", dim, filter_value)
+                                    break
+                            except ValueError:
+                                continue  # Skip if filter_value isn't numeric
         
         # Extract exclusions
         if "excluding" in prompt_lower:
@@ -161,6 +186,7 @@ def rule_based_parse(prompt, dimensions, measures, dates):
         logger.error("Failed to parse prompt %s: %s", prompt, str(e))
         return None, None, None, None, None, {}, False, [], None
 
+
 def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order="Descending", chart_type=None):
     """
     Render a chart based on the parsed prompt.
@@ -168,7 +194,7 @@ def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order=
     """
     try:
         # Parse the prompt
-        metric, dimension, second_metric, trend, top_n, filters, outliers, exclude, secondary_dimension = rule_based_parse(prompt, dimensions, measures, dates)
+        metric, dimension, second_metric, trend, top_n, filters, outliers, exclude, secondary_dimension = rule_based_parse(prompt, dimensions, measures, dates, df)
         
         if not metric or (not dimension and not trend and not second_metric):
             logger.error("Metric or dimension not identified for prompt: %s", prompt)
@@ -272,10 +298,15 @@ def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order=
                     logger.error("Error in detect_outliers for metric=%s: %s", metric, str(e))
                     return None
         
-        # Use user-selected chart type if provided, otherwise determine default
+        # Track if this is a two-metric prompt
+        is_two_metric = bool(second_metric)
+        
+        # Use user-selected chart type if provided
         if chart_type:
             render_type = chart_type
+            logger.info("Using user-selected chart type for chart %d: %s", chart_idx, render_type)
         else:
+            # Default chart type selection
             if trend:
                 render_type = "Line"
             elif second_metric:
@@ -287,7 +318,7 @@ def render_chart(chart_idx, prompt, dimensions, measures, dates, df, sort_order=
             else:
                 render_type = "Bar"
         
-        logger.info("Selected chart type for chart %d: %s (user-selected: %s)", chart_idx, render_type, chart_type)
+        logger.info("Final chart type for chart %d: %s (user-selected: %s, is_two_metric: %s)", chart_idx, render_type, chart_type, is_two_metric)
         
         # Prepare table columns for display
         table_columns = []
