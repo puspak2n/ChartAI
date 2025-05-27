@@ -1,0 +1,7 @@
+[theme]
+base="light"
+primaryColor="#008080"             # Teal accent
+backgroundColor="#F5F5F5"          # Light gray background
+secondaryBackgroundColor="#E0E0E0" # Slightly darker gray
+textColor="#000000"                # Black text
+font="sans serif"                 # Default sans-serif font
